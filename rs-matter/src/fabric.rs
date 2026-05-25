@@ -595,6 +595,14 @@ impl Fabric {
         &self.ipk
     }
 
+    /// Replace the already-derived operational IPK.
+    ///
+    /// This is used when importing a controller fabric from stores that persist
+    /// the operational key rather than the original epoch key.
+    pub fn set_ipk_operational_key(&mut self, op_key: CanonAeadKeyRef<'_>) {
+        self.ipk.op_key.load(op_key);
+    }
+
     /// Return the fabric's groups
     pub fn groups(&self) -> &Groups {
         &self.groups

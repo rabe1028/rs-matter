@@ -25,12 +25,13 @@
 
 use crate::cert::builder::{IcacBuilder, IssuerDN, NocBuilder, RcacBuilder, Validity};
 use crate::cert::x509::csr::CsrRef;
-use crate::cert::{MAX_CERT_TLV_AND_ASN1_LEN, MAX_CERT_TLV_LEN};
+use crate::cert::{CertRef, MAX_CERT_TLV_AND_ASN1_LEN, MAX_CERT_TLV_LEN};
 use crate::crypto::{
     CanonPkcPublicKey, CanonPkcPublicKeyRef, CanonPkcSecretKey, Crypto, PublicKey, RngCore,
     SecretKey, SigningSecretKey,
 };
 use crate::error::{Error, ErrorCode};
+use crate::tlv::TLVElement;
 
 /// Generated NOC credentials for a device.
 #[derive(Debug)]
@@ -63,12 +64,16 @@ pub struct NocGenerator {
     root_pubkey: CanonPkcPublicKey,
     /// Root CA certificate (TLV encoded)
     root_cert: heapless::Vec<u8, MAX_CERT_TLV_LEN>,
+    /// Whether the imported/generated Root CA subject DN contains a Fabric ID.
+    root_has_fabric_id: bool,
     /// Optional ICAC private key
     icac_privkey: Option<CanonPkcSecretKey>,
     /// Optional ICAC public key
     icac_pubkey: Option<CanonPkcPublicKey>,
     /// Optional ICAC certificate (TLV encoded)
     icac_cert: Option<heapless::Vec<u8, MAX_CERT_TLV_LEN>>,
+    /// Whether the imported/generated ICAC subject DN contains a Fabric ID.
+    icac_has_fabric_id: bool,
     /// Fabric ID for this generator
     fabric_id: u64,
     /// RCAC ID
@@ -144,9 +149,11 @@ impl NocGenerator {
             root_privkey,
             root_pubkey,
             root_cert,
+            root_has_fabric_id: true,
             icac_privkey: None,
             icac_pubkey: None,
             icac_cert: None,
+            icac_has_fabric_id: false,
             fabric_id,
             rcac_id,
             icac_id: None,
@@ -181,17 +188,76 @@ impl NocGenerator {
         cert_vec
             .extend_from_slice(root_cert)
             .map_err(|_| Error::from(ErrorCode::BufferTooSmall))?;
+        let root_has_fabric_id = CertRef::new(TLVElement::new(root_cert))
+            .get_fabric_id()
+            .is_ok();
 
         Ok(Self {
             root_privkey,
             root_pubkey,
             root_cert: cert_vec,
+            root_has_fabric_id,
             icac_privkey: None,
             icac_pubkey: None,
             icac_cert: None,
+            icac_has_fabric_id: false,
             fabric_id,
             rcac_id,
             icac_id: None,
+            next_serial: 1,
+            validity,
+        })
+    }
+
+    /// Create a NOC generator from existing Root CA and Intermediate CA credentials.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_root_ca_and_icac<C: Crypto>(
+        crypto: &C,
+        root_privkey: CanonPkcSecretKey,
+        root_cert: &[u8],
+        icac_privkey: CanonPkcSecretKey,
+        icac_cert: &[u8],
+        fabric_id: u64,
+        rcac_id: u64,
+        icac_id: u64,
+        validity: Validity,
+    ) -> Result<Self, Error> {
+        let root_key = crypto.secret_key(root_privkey.reference())?;
+        let mut root_pubkey = CanonPkcPublicKey::new();
+        root_key.pub_key()?.write_canon(&mut root_pubkey)?;
+
+        let icac_key = crypto.secret_key(icac_privkey.reference())?;
+        let mut icac_pubkey = CanonPkcPublicKey::new();
+        icac_key.pub_key()?.write_canon(&mut icac_pubkey)?;
+
+        let mut root_cert_vec = heapless::Vec::new();
+        root_cert_vec
+            .extend_from_slice(root_cert)
+            .map_err(|_| Error::from(ErrorCode::BufferTooSmall))?;
+
+        let mut icac_cert_vec = heapless::Vec::new();
+        icac_cert_vec
+            .extend_from_slice(icac_cert)
+            .map_err(|_| Error::from(ErrorCode::BufferTooSmall))?;
+        let root_has_fabric_id = CertRef::new(TLVElement::new(root_cert))
+            .get_fabric_id()
+            .is_ok();
+        let icac_has_fabric_id = CertRef::new(TLVElement::new(icac_cert))
+            .get_fabric_id()
+            .is_ok();
+
+        Ok(Self {
+            root_privkey,
+            root_pubkey,
+            root_cert: root_cert_vec,
+            root_has_fabric_id,
+            icac_privkey: Some(icac_privkey),
+            icac_pubkey: Some(icac_pubkey),
+            icac_cert: Some(icac_cert_vec),
+            icac_has_fabric_id,
+            fabric_id,
+            rcac_id,
+            icac_id: Some(icac_id),
             next_serial: 1,
             validity,
         })
@@ -261,6 +327,7 @@ impl NocGenerator {
         self.icac_privkey = Some(icac_privkey);
         self.icac_pubkey = Some(icac_pubkey);
         self.icac_cert = Some(icac_cert);
+        self.icac_has_fabric_id = true;
         self.icac_id = Some(icac_id);
 
         Ok(self.icac_cert.as_ref().unwrap().as_slice())
@@ -308,15 +375,16 @@ impl NocGenerator {
         let signing_key = crypto.secret_key(signing_privkey.reference())?;
 
         // Determine issuer CA ID and whether issuer is RCAC
-        let (issuer_ca_id, is_issuer_rcac) = if let Some(icac_id) = self.icac_id {
-            (icac_id, false) // Signed by ICAC
-        } else {
-            (self.rcac_id, true) // Signed directly by RCAC
-        };
+        let (issuer_ca_id, is_issuer_rcac, issuer_has_fabric_id) =
+            if let Some(icac_id) = self.icac_id {
+                (icac_id, false, self.icac_has_fabric_id) // Signed by ICAC
+            } else {
+                (self.rcac_id, true, self.root_has_fabric_id) // Signed directly by RCAC
+            };
 
         let issuer = IssuerDN {
             ca_id: Some(issuer_ca_id),
-            fabric_id: Some(self.fabric_id),
+            fabric_id: issuer_has_fabric_id.then_some(self.fabric_id),
             is_rcac: is_issuer_rcac,
         };
 
@@ -348,6 +416,11 @@ impl NocGenerator {
     /// Get the Root CA certificate.
     pub fn root_cert(&self) -> &[u8] {
         &self.root_cert
+    }
+
+    /// Get the Root CA private key in canonical form.
+    pub fn root_private_key(&self) -> CanonPkcSecretKey {
+        self.root_privkey.clone()
     }
 
     /// Get the ICAC certificate (if generated).

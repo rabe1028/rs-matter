@@ -370,15 +370,16 @@ impl<C: Crypto> PaseInitiator<C> {
             .expand(&[], ke, SPAKE2_SESSION_KEYS_INFO, &mut session_keys)
             .map_err(|_| ErrorCode::InvalidData)?;
 
+        // Acknowledge the final unencrypted StatusReport before promoting the
+        // reserved session to PASE encryption.
+        exchange.acknowledge().await?;
+
         // Get peer address
         let peer_addr = exchange.with_state(|state| {
             let sess = exchange.id().session(&mut state.sessions);
             Ok(sess.get_peer_addr())
         })?;
 
-        // Split session keys into dec_key, enc_key, att_challenge
-        // Note: For initiator, the key order is swapped compared to responder
-        // because what we encrypt, they decrypt and vice versa
         let (enc_key, remaining) = session_keys
             .reference()
             .split::<AEAD_CANON_KEY_LEN, { AEAD_CANON_KEY_LEN * 2 }>();
@@ -399,9 +400,6 @@ impl<C: Crypto> PaseInitiator<C> {
 
         // Complete the reserved session
         session.complete();
-
-        // Acknowledge the final message
-        exchange.acknowledge().await?;
 
         info!(
             "PASE session established: local_sessid={}, peer_sessid={}",

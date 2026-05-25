@@ -20,6 +20,8 @@
 //! This crate contains the Matter IDL parser and Rust code generator,
 //! extracted from the proc-macro crate so it can be used from build.rs scripts.
 
+#![allow(warnings)]
+
 use std::path::Path;
 
 use idl::{cluster_content, globals, Idl, IdlGenerateContext, CSA_STANDARD_CLUSTERS_IDL_V1_5_1_0};
