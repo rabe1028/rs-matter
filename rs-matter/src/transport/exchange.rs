@@ -41,6 +41,15 @@ use super::proto_hdr::ProtoHdr;
 use super::session::{Session, SessionMode};
 use super::{PacketAccess, MAX_RX_BUF_SIZE, MAX_TX_BUF_SIZE};
 
+/// Public identity of the peer owning an authenticated CASE exchange.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CasePeerIdentity {
+    /// Local fabric table index associated with the CASE session.
+    pub fabric_index: core::num::NonZeroU8,
+    /// Operational node ID authenticated by CASE.
+    pub node_id: NodeId,
+}
+
 /// Minimum buffer which should be allocated by user code that wants to pull RX messages via `Exchange::recv_into`
 ///
 /// When the `large-buffers` feature is enabled, this tracks the larger TCP-capable packet
@@ -1029,6 +1038,25 @@ impl<'a> Exchange<'a> {
         self.matter
     }
 
+    /// Return the authenticated CASE peer identity for this exchange.
+    ///
+    /// PASE, group, and plaintext exchanges return `None`. A malformed CASE
+    /// session without a peer node ID fails closed.
+    pub fn case_peer_identity(&self) -> Result<Option<CasePeerIdentity>, Error> {
+        self.with_state(|state| {
+            let session = self.id().session(&mut state.sessions);
+            let SessionMode::Case { fab_idx, .. } = session.get_session_mode() else {
+                return Ok(None);
+            };
+            let node_id = session.get_peer_node_id().ok_or(ErrorCode::Invalid)?;
+
+            Ok(Some(CasePeerIdentity {
+                fabric_index: *fab_idx,
+                node_id,
+            }))
+        })
+    }
+
     /// Create a new initiator exchange on the provided Matter stack for the provided peer Node ID.
     ///
     /// For now, this method will fail if there is no existing session in the provided Matter stack
@@ -1466,6 +1494,66 @@ mod tests {
                 break;
             }
         });
+    }
+
+    #[test]
+    fn case_peer_identity_exposes_only_authenticated_case_sessions() {
+        let matter = test_matter();
+        let exchange_id = matter.with_state(|state| {
+            let session = state
+                .sessions
+                .add(0, false, network::Address::new(), Some(0x1234))
+                .unwrap();
+            session.set_session_mode(SessionMode::Case {
+                fab_idx: core::num::NonZeroU8::new(7).unwrap(),
+                cat_ids: [0; crate::transport::session::MAX_CAT_IDS_PER_NOC],
+            });
+            let exchange_index = session
+                .add_exch(1, Role::Responder(ResponderState::Owned))
+                .unwrap();
+            ExchangeId::new(session.id(), exchange_index)
+        });
+        let exchange = Exchange::new(exchange_id, &matter);
+
+        assert_eq!(
+            exchange.case_peer_identity().unwrap(),
+            Some(CasePeerIdentity {
+                fabric_index: core::num::NonZeroU8::new(7).unwrap(),
+                node_id: 0x1234,
+            })
+        );
+
+        exchange
+            .with_state(|state| {
+                exchange
+                    .id()
+                    .session(&mut state.sessions)
+                    .set_session_mode(SessionMode::Pase { fab_idx: 7 });
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(exchange.case_peer_identity().unwrap(), None);
+
+        let malformed_exchange_id = matter.with_state(|state| {
+            let session = state
+                .sessions
+                .add(0, false, network::Address::new(), None)
+                .unwrap();
+            session.set_session_mode(SessionMode::Case {
+                fab_idx: core::num::NonZeroU8::new(7).unwrap(),
+                cat_ids: [0; crate::transport::session::MAX_CAT_IDS_PER_NOC],
+            });
+            let exchange_index = session
+                .add_exch(2, Role::Responder(ResponderState::Owned))
+                .unwrap();
+            ExchangeId::new(session.id(), exchange_index)
+        });
+        let malformed_exchange = Exchange::new(malformed_exchange_id, &matter);
+
+        assert_eq!(
+            malformed_exchange.case_peer_identity().unwrap_err().code(),
+            ErrorCode::Invalid
+        );
     }
 
     #[test]
