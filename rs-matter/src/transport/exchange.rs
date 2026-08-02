@@ -46,6 +46,8 @@ use super::{PacketAccess, MAX_RX_BUF_SIZE, MAX_TX_BUF_SIZE};
 pub struct CasePeerIdentity {
     /// Local fabric table index associated with the CASE session.
     pub fabric_index: core::num::NonZeroU8,
+    /// Stable operational fabric ID associated with the CASE session.
+    pub fabric_id: u64,
     /// Operational node ID authenticated by CASE.
     pub node_id: NodeId,
 }
@@ -1049,9 +1051,11 @@ impl<'a> Exchange<'a> {
                 return Ok(None);
             };
             let node_id = session.get_peer_node_id().ok_or(ErrorCode::Invalid)?;
+            let fabric_id = state.fabrics.fabric(*fab_idx)?.fabric_id();
 
             Ok(Some(CasePeerIdentity {
                 fabric_index: *fab_idx,
+                fabric_id,
                 node_id,
             }))
         })
@@ -1500,12 +1504,17 @@ mod tests {
     fn case_peer_identity_exposes_only_authenticated_case_sessions() {
         let matter = test_matter();
         let exchange_id = matter.with_state(|state| {
+            let fabric_index = state
+                .fabrics
+                .add_with_post_init(|_| Ok(()))
+                .unwrap()
+                .fab_idx();
             let session = state
                 .sessions
                 .add(0, false, network::Address::new(), Some(0x1234))
                 .unwrap();
             session.set_session_mode(SessionMode::Case {
-                fab_idx: core::num::NonZeroU8::new(7).unwrap(),
+                fab_idx: fabric_index,
                 cat_ids: [0; crate::transport::session::MAX_CAT_IDS_PER_NOC],
             });
             let exchange_index = session
@@ -1518,7 +1527,8 @@ mod tests {
         assert_eq!(
             exchange.case_peer_identity().unwrap(),
             Some(CasePeerIdentity {
-                fabric_index: core::num::NonZeroU8::new(7).unwrap(),
+                fabric_index: core::num::NonZeroU8::new(1).unwrap(),
+                fabric_id: 0,
                 node_id: 0x1234,
             })
         );
