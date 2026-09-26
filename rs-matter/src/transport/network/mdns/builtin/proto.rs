@@ -712,6 +712,7 @@ mod tests {
     use domain::base::header::Flags;
     use domain::base::iana::{Class, Opcode, Rcode};
     use domain::base::{Message, MessageBuilder, Name, ParsedRecord, Rtype, ToName};
+    use domain::dep::octseq::array::Array;
     use domain::rdata::AllRecordData;
 
     use crate::transport::network::mdns::builtin::types::Buf;
@@ -1048,7 +1049,7 @@ mod tests {
         header.set_flags(flags);
 
         let dname = unwrap!(
-            Name::<heapless::Vec<u8, 64>>::from_chars("foo.local".chars()),
+            Name::<Array<64>>::from_chars("foo.local".chars()),
             "Failed to convert question name"
         );
         unwrap!(
@@ -1103,9 +1104,7 @@ mod tests {
         let mut qflags = Flags::new();
         qflags.qr = false;
         qheader.set_flags(qflags);
-        let qname = unwrap!(Name::<heapless::Vec<u8, 64>>::from_chars(
-            "foo.local".chars()
-        ));
+        let qname = unwrap!(Name::<Array<64>>::from_chars("foo.local".chars()));
         unwrap!(qb.push((qname, Rtype::A, Class::IN)));
         let qlen = qb.finish().as_ref().len();
         let query = &qbuf[..qlen];
@@ -1131,9 +1130,7 @@ mod tests {
         assert_eq!(q.qtype(), Rtype::A);
         assert!(q
             .qname()
-            .name_eq(&unwrap!(Name::<heapless::Vec<u8, 64>>::from_chars(
-                "foo.local".chars()
-            ))));
+            .name_eq(&unwrap!(Name::<Array<64>>::from_chars("foo.local".chars()))));
         assert!(questions.next().is_none(), "exactly one echoed question");
 
         // Answer: A record for foo.local, TTL capped at 10, no cache-flush bit.
@@ -1277,7 +1274,7 @@ mod tests {
 
             for question in questions {
                 let dname = unwrap!(
-                    Name::<heapless::Vec<u8, 64>>::from_chars(question.name.chars()),
+                    Name::<Array<64>>::from_chars(question.name.chars()),
                     "Failed to convert question name"
                 );
 
@@ -1379,9 +1376,9 @@ mod tests {
                 *expected_idx += 1;
 
                 assert!(
-                    answer.owner().name_eq(
-                        &Name::<heapless::Vec<u8, 64>>::from_chars(expected.owner.chars()).unwrap()
-                    ),
+                    answer
+                        .owner()
+                        .name_eq(&Name::<Array<64>>::from_chars(expected.owner.chars()).unwrap()),
                     "OWNER {} (answer) != {} (expected)",
                     display2format!(answer.owner()),
                     expected.owner
@@ -1397,9 +1394,8 @@ mod tests {
                     (AllRecordData::Srv(s), AnswerDetails::Srv { port, target }) => {
                         assert_eq!(s.port(), *port);
                         assert!(
-                            s.target().name_eq(
-                                &Name::<heapless::Vec<u8, 64>>::from_chars(target.chars()).unwrap()
-                            ),
+                            s.target()
+                                .name_eq(&Name::<Array<64>>::from_chars(target.chars()).unwrap()),
                             "SRV {} (answer) != {} (expected)",
                             display2format!(s.target()),
                             target
@@ -1407,9 +1403,8 @@ mod tests {
                     }
                     (AllRecordData::Ptr(p), AnswerDetails::Ptr(name)) => {
                         assert!(
-                            p.ptrdname().name_eq(
-                                &Name::<heapless::Vec<u8, 64>>::from_chars(name.chars()).unwrap()
-                            ),
+                            p.ptrdname()
+                                .name_eq(&Name::<Array<64>>::from_chars(name.chars()).unwrap()),
                             "PTR {} (answer) != {} (expected)",
                             display2format!(p.ptrdname()),
                             name,
