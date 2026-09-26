@@ -27,6 +27,7 @@ use domain::base::header::Flags;
 use domain::base::iana::{Class, Opcode, Rcode, Rtype};
 use domain::base::message_builder::MessageBuilder;
 use domain::base::{Message, Name};
+use domain::dep::octseq::array::Array;
 use domain::rdata::{Aaaa, Ptr, Srv, Txt, A};
 
 use embassy_futures::select::{select, Either};
@@ -98,7 +99,7 @@ fn build_ptr_query(service_type: &str, buf: &mut [u8]) -> Result<usize, Error> {
     // We want multicast responses so all listeners receive them
     // With QU bit, responses may be unicast and get routed to the wrong socket
     // when multiple processes share port 5353 with SO_REUSEPORT
-    let name = Name::<heapless::Vec<u8, 64>>::from_chars(service_type.chars())?;
+    let name = Name::<Array<64>>::from_chars(service_type.chars())?;
     question.push((&name, Rtype::PTR, Class::IN))?;
 
     let buf = question.finish();
