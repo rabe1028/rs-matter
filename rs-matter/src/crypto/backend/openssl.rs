@@ -22,8 +22,6 @@
 //! This is done so that programming errors are caught early-on, with meaningful location and backtraces,
 //! even in `no_std` environments where backtrace capturing during error propagation does not work.
 
-#![allow(deprecated)] // Remove this once `hmac` updates to `generic-array` 1.x
-
 use core::ops::Mul;
 
 use openssl::asn1::Asn1Type;
@@ -43,7 +41,7 @@ use openssl::x509::{X509NameBuilder, X509ReqBuilder};
 // We directly use the hmac crate here, there was a self-referential structure
 // problem while using OpenSSL's Signer
 // TODO: Use proper OpenSSL method for this
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 
 use rand_core::{CryptoRng, RngCore};
 
